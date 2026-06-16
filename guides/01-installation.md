@@ -1,168 +1,145 @@
-# 安装指南
+# Scrapling 安装指南
 
-## 适用场景
+## 系统要求
 
-- 安装 Scrapling 核心库并配置浏览器驱动
-- 在 Docker 环境中使用预置镜像
-- 为不同 Fetcher 安装对应依赖
+- Python 3.8 或更高版本
+- pip 包管理器
+- 操作系统：Linux、macOS 或 Windows
 
----
+## 安装方式
 
-## 基础安装
-
-> **AI 可自动执行**
+### 基础安装（仅解析器）
 
 ```bash
 pip install scrapling
 ```
 
-验证安装：
+### 推荐安装（包含 HTTP 和浏览器自动化）
+
 ```bash
-python -c "import scrapling; print(scrapling.__version__)"
+pip install "scrapling[fetchers]"
+scrapling install
 ```
 
----
-
-## 按需安装浏览器驱动
-
-Scrapling 有三种 Fetcher，各需不同依赖：
-
-### Fetcher（纯 HTTP，无需额外驱动）
+### 完整安装（包含 CLI 工具）
 
 ```bash
-pip install scrapling
-# 无需额外安装，开箱即用
+pip install "scrapling[shell]"
 ```
 
-### StealthyFetcher（隐身模式，需要 Camoufox）
+### AI 集成安装（包含 MCP 服务器）
 
 ```bash
-pip install scrapling
-scrapling install camoufox   # 安装修改版 Firefox 驱动
+pip install "scrapling[ai]"
 ```
 
-或手动安装：
-```bash
-pip install camoufox[geoip]
-python -m camoufox fetch
-```
+## 虚拟环境安装（推荐）
 
-### DynamicFetcher（完整浏览器自动化，需要 Playwright）
+### 创建虚拟环境
 
 ```bash
-pip install scrapling
-scrapling install playwright   # 安装 Playwright 和 Chromium
-```
-
-或手动安装：
-```bash
-pip install playwright
-playwright install chromium
-```
-
----
-
-## 一次性安装全部依赖
-
-```bash
-pip install scrapling
-scrapling install all
-```
-
----
-
-## Docker 安装（推荐生产环境）
-
-使用官方预置镜像（含所有浏览器驱动）：
-
-```bash
-# 拉取最新镜像
-docker pull d4vinci/scrapling:latest
-
-# 运行容器
-docker run -it d4vinci/scrapling:latest python3
-
-# 在容器内直接使用
-docker run --rm d4vinci/scrapling:latest python3 -c "
-from scrapling.fetchers import StealthyFetcher
-page = StealthyFetcher.fetch('https://example.com', headless=True)
-print(page.css('title::text').get())
-"
-```
-
----
-
-## 虚拟环境（推荐）
-
-```bash
+# 创建虚拟环境
 python -m venv scrapling-env
-source scrapling-env/bin/activate   # Windows: scrapling-env\Scripts\activate
-pip install scrapling
-scrapling install playwright
+
+# 激活虚拟环境
+# Linux/macOS
+source scrapling-env/bin/activate
+
+# Windows
+scrapling-env\Scripts\activate
 ```
 
----
-
-## MCP 服务器安装（AI 集成）
-
-Scrapling 内置 MCP 服务器，让 Claude/Cursor 等 AI 直接调用：
-
-### Claude Code
+### 在虚拟环境中安装
 
 ```bash
-claude mcp add scrapling --scope user npx -y scrapling-mcp
+pip install "scrapling[fetchers]"
+scrapling install
 ```
 
-或手动安装后配置：
-```json
-{
-  "mcpServers": {
-    "scrapling": {
-      "command": "python",
-      "args": ["-m", "scrapling.mcp"]
-    }
-  }
-}
-```
+## 系统依赖安装
 
-### 直接启动 MCP 服务器
+### Ubuntu/Debian
 
 ```bash
-scrapling mcp
+sudo apt-get update
+sudo apt-get install -y python3-dev build-essential
 ```
 
----
+### CentOS/RHEL
+
+```bash
+sudo yum groupinstall -y "Development Tools"
+sudo yum install -y python3-devel
+```
+
+### macOS
+
+```bash
+xcode-select --install
+```
 
 ## 验证安装
 
-```python
-# 验证核心安装
-from scrapling.fetchers import Fetcher
-page = Fetcher.get('https://httpbin.org/get')
-print(page.status)  # 期望：200
+```bash
+# 检查 Scrapling 版本
+python -c "import scrapling; print(scrapling.__version__)"
 
-# 验证 Playwright（DynamicFetcher）
-from scrapling.fetchers import DynamicFetcher
-page = DynamicFetcher.fetch('https://example.com', headless=True)
-print(page.css('title::text').get())
-
-# 验证 Camoufox（StealthyFetcher）
-from scrapling.fetchers import StealthyFetcher
-page = StealthyFetcher.fetch('https://example.com', headless=True)
-print(page.css('title::text').get())
+# 测试基本功能
+python -c "
+from scrapling import Fetcher
+fetcher = Fetcher()
+page = fetcher.fetch('https://example.com')
+print(f'Title: {page.css(\"title\").text()}')
+"
 ```
 
----
+## 升级 Scrapling
 
-## 完成确认检查清单
+```bash
+pip install --upgrade scrapling
+pip install --upgrade "scrapling[fetchers]"
+scrapling install
+```
 
-- [ ] `pip install scrapling` 执行成功
-- [ ] `python -c "import scrapling"` 无报错
-- [ ] 按需安装了 Playwright 或 Camoufox（视场景而定）
-- [ ] `Fetcher.get('https://httpbin.org/get').status == 200` 验证通过
+## 卸载 Scrapling
 
----
+```bash
+pip uninstall scrapling
+```
+
+## 常见安装问题
+
+### 权限问题
+
+```bash
+# 使用 --user 安装
+pip install --user scrapling
+
+# 或使用虚拟环境（推荐）
+python -m venv venv
+source venv/bin/activate
+pip install scrapling
+```
+
+### 依赖冲突
+
+```bash
+# 创建新的虚拟环境
+python -m venv fresh-env
+source fresh-env/bin/activate
+pip install scrapling
+```
+
+### 网络问题
+
+```bash
+# 使用国内镜像源
+pip install scrapling -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 或使用阿里云镜像
+pip install scrapling -i https://mirrors.aliyun.com/pypi/simple/
+```
 
 ## 下一步
 
-- [快速开始](02-quickstart.md) — Fetcher 选型指南、CSS/XPath 选择器、自适应抓取
+安装完成后，请参阅 [快速开始指南](02-quickstart.md) 学习基本用法。

@@ -1,262 +1,416 @@
-# 高级用法
+# Scrapling 高级用法
 
-## Spider 框架（大规模并发爬取）
+## 异步处理
 
-Spider 框架提供 Scrapy 风格的 API，适合需要跨多页面爬取的任务：
-
-```python
-from scrapling.spiders import Spider, Request, Response
-
-class QuotesSpider(Spider):
-    name = "quotes"
-    start_urls = ["https://quotes.toscrape.com/"]
-    concurrent_requests = 10       # 最大并发数
-    download_delay = 0.5           # 请求间隔（秒）
-    robots_txt_obey = True         # 遵守 robots.txt
-
-    async def parse(self, response: Response):
-        for quote in response.css('.quote'):
-            yield {
-                "text": quote.css('.text::text').get(),
-                "author": quote.css('.author::text').get(),
-                "tags": quote.css('.tag::text').getall(),
-            }
-        # 翻页
-        next_page = response.css('li.next a::attr(href)').get()
-        if next_page:
-            yield Request(response.urljoin(next_page))
-
-# 运行爬虫
-result = QuotesSpider().start()
-result.items.to_json('quotes.json')       # 导出 JSON
-result.items.to_jsonl('quotes.jsonl')     # 导出 JSONL
-```
-
----
-
-## 暂停与恢复爬虫
+### 使用 AsyncFetcher
 
 ```python
-from scrapling.spiders import Spider
-
-class LargeSpider(Spider):
-    name = "large"
-    start_urls = ["https://large-site.com/"]
-    # 开启检查点持久化
-    checkpoint = True
-
-    async def parse(self, response):
-        # ...爬取逻辑...
-        pass
-
-# 启动时按 Ctrl+C 优雅停止
-result = LargeSpider().start()
-
-# 下次运行时自动从上次停止的地方继续
-result = LargeSpider().start()   # 无需额外配置
-```
-
----
-
-## 流式输出（实时处理）
-
-```python
-from scrapling.spiders import Spider
 import asyncio
+from scrapling import AsyncFetcher
 
-class StreamingSpider(Spider):
-    name = "stream"
-    start_urls = ["https://news-site.com/"]
-
-    async def parse(self, response):
-        for article in response.css('article'):
-            yield {"title": article.css('h2::text').get()}
+async def fetch_page(url):
+    fetcher = AsyncFetcher()
+    page = await fetcher.fetch(url)
+    return page
 
 async def main():
-    spider = StreamingSpider()
-    async for item in spider.stream():
-        # 实时处理每个抓取到的 item
-        print(item)
-        # 实时写入数据库、发送到队列等
+    urls = [
+        'https://example.com',
+        'https://example.org',
+        'https://example.net'
+    ]
+    
+    tasks = [fetch_page(url) for url in urls]
+    pages = await asyncio.gather(*tasks)
+    
+    for page in pages:
+        print(f'标题: {page.css("title").text()}')
 
+# 运行异步代码
 asyncio.run(main())
 ```
 
----
-
-## 多 Session 路由（混用 HTTP 和浏览器）
-
-```python
-from scrapling.spiders import Spider, Request, Response
-
-class HybridSpider(Spider):
-    name = "hybrid"
-    start_urls = ["https://example.com/catalog"]
-
-    async def parse(self, response: Response):
-        for link in response.css('.product-link::attr(href)').getall():
-            # 普通页面用 HTTP，详情页面用浏览器
-            if '/protected/' in link:
-                yield Request(link, session_id='stealthy')   # 使用 StealthyFetcher
-            else:
-                yield Request(link)                           # 使用默认 HTTP
-
-    async def parse_product(self, response: Response):
-        yield {"title": response.css('h1::text').get()}
-```
-
----
-
-## 代理轮换
-
-```python
-from scrapling.fetchers import Fetcher, FetcherSession, StealthyFetcher
-from scrapling.proxy_rotator import ProxyRotator
-
-# 设置代理列表
-proxies = [
-    "http://user:pass@proxy1.example.com:8080",
-    "http://user:pass@proxy2.example.com:8080",
-    "socks5://user:pass@proxy3.example.com:1080",
-]
-
-# 循环轮换
-rotator = ProxyRotator(proxies, mode='cyclic')
-
-with FetcherSession(proxy=rotator) as session:
-    page = session.get('https://example.com')
-    print(page.css('title::text').get())
-
-# Spider 中使用代理
-class ProxySpider(Spider):
-    name = "proxy"
-    start_urls = ["https://example.com/"]
-    proxies = proxies   # 直接指定代理列表（自动轮换）
-
-    async def parse(self, response):
-        yield {"url": response.url}
-```
-
----
-
-## 防 DNS 泄露（DoH 模式）
-
-使用代理时，防止真实 IP 通过 DNS 查询泄露：
-
-```python
-from scrapling.fetchers import Fetcher
-
-page = Fetcher.get(
-    'https://example.com',
-    doh=True   # 通过 Cloudflare DoH 路由 DNS 查询
-)
-```
-
----
-
-## 广告拦截和域名过滤
-
-```python
-from scrapling.fetchers import DynamicFetcher, DynamicSession
-
-# 开启内置广告拦截（约 3500 个广告/追踪域名）
-with DynamicSession(headless=True, block_ads=True) as session:
-    page = session.fetch('https://news-site.com/')
-
-# 自定义域名黑名单（拦截指定域名及其所有子域名）
-with DynamicSession(
-    headless=True,
-    blocked_domains=['ads.example.com', 'tracker.net']
-) as session:
-    page = session.fetch('https://example.com/')
-```
-
----
-
-## MCP 服务器（AI 集成）
-
-Scrapling 内置 MCP 服务器，让 Claude/Cursor 直接控制浏览器提取数据，在传给 AI 之前完成精准提取，大幅降低 Token 消耗：
-
-### 启动 MCP 服务器
-
-```bash
-# 直接启动（用于手动测试）
-scrapling mcp
-
-# 在 Claude Code 中配置
-claude mcp add scrapling --scope user python -m scrapling.mcp
-```
-
-### Claude Code 配置
-
-```json
-{
-  "mcpServers": {
-    "scrapling": {
-      "command": "python",
-      "args": ["-m", "scrapling.mcp"],
-      "env": {}
-    }
-  }
-}
-```
-
-### 在 AI 对话中使用
-
-```
-请用 Scrapling 抓取 https://news.ycombinator.com/ 的所有文章标题和链接
-
-请用隐身模式抓取 https://example.com/products 的商品列表，这个网站有 Cloudflare 保护
-```
-
----
-
-## 开发模式（离线调试）
-
-```python
-from scrapling.fetchers import Fetcher
-
-# 首次运行：缓存响应到磁盘
-page = Fetcher.get('https://example.com', cache=True)
-products = page.css('.product', auto_save=True)
-
-# 后续运行：从缓存读取，无需网络请求（快速迭代解析逻辑）
-page = Fetcher.get('https://example.com', cache=True, dev_mode=True)
-products = page.css('.product', adaptive=True)
-```
-
----
-
-## 异步并发抓取
+### 批量处理
 
 ```python
 import asyncio
-from scrapling.fetchers import AsyncFetcher
+from scrapling import AsyncFetcher
 
-async def fetch_all(urls):
-    async with AsyncFetcher() as fetcher:
-        tasks = [fetcher.get(url) for url in urls]
-        pages = await asyncio.gather(*tasks)
-        return [page.css('title::text').get() for page in pages]
+async def process_urls(urls):
+    fetcher = AsyncFetcher()
+    results = []
+    
+    for url in urls:
+        try:
+            page = await fetcher.fetch(url)
+            results.append({
+                'url': url,
+                'title': page.css('title').text(),
+                'status': page.status
+            })
+        except Exception as e:
+            results.append({
+                'url': url,
+                'error': str(e)
+            })
+    
+    return results
 
-urls = [f"https://example.com/page/{i}" for i in range(1, 20)]
-titles = asyncio.run(fetch_all(urls))
+# 使用
+urls = ['https://example.com', 'https://example.org']
+results = asyncio.run(process_urls(urls))
 ```
 
----
+## 代理配置
 
-## 完成确认检查清单
+### 基本代理
 
-- [ ] Spider 类成功爬取多页数据并导出 JSON
-- [ ] 代理轮换配置正确（可选）
-- [ ] MCP 服务器启动成功（如需 AI 集成）
-- [ ] 暂停/恢复功能测试通过（长任务场景）
+```python
+from scrapling import Fetcher
 
----
+fetcher = Fetcher()
+page = fetcher.fetch(
+    'https://example.com',
+    proxies={
+        'http': 'http://proxy:port',
+        'https': 'http://proxy:port'
+    }
+)
+```
 
-## 相关链接
+### 认证代理
 
-- [故障排查](../troubleshooting.md)
-- [完整文档](https://scrapling.readthedocs.io/en/latest/)
-- [Spider API 参考](https://scrapling.readthedocs.io/en/latest/spiders/architecture.html)
-- [MCP 文档](https://scrapling.readthedocs.io/en/latest/ai/mcp-server.html)
+```python
+from scrapling import Fetcher
+
+fetcher = Fetcher()
+page = fetcher.fetch(
+    'https://example.com',
+    proxies={
+        'http': 'http://user:pass@proxy:port',
+        'https': 'http://user:pass@proxy:port'
+    }
+)
+```
+
+### 代理轮换
+
+```python
+import random
+from scrapling import Fetcher
+
+proxies = [
+    'http://proxy1:port',
+    'http://proxy2:port',
+    'http://proxy3:port'
+]
+
+fetcher = Fetcher()
+for url in urls:
+    proxy = random.choice(proxies)
+    page = fetcher.fetch(url, proxies={'http': proxy, 'https': proxy})
+```
+
+## 自定义请求头
+
+```python
+from scrapling import Fetcher
+
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5',
+    'Accept-Encoding': 'gzip, deflate',
+    'Connection': 'keep-alive',
+}
+
+fetcher = Fetcher()
+page = fetcher.fetch('https://example.com', headers=headers)
+```
+
+## 处理 Cookies
+
+### 自动 Cookies
+
+```python
+from scrapling import Fetcher
+
+fetcher = Fetcher()
+page = fetcher.fetch('https://example.com')
+
+# 获取 cookies
+cookies = page.cookies
+for cookie in cookies:
+    print(f'{cookie.name}: {cookie.value}')
+```
+
+### 自定义 Cookies
+
+```python
+from scrapling import Fetcher
+
+cookies = {
+    'session_id': 'abc123',
+    'user_pref': 'dark_mode'
+}
+
+fetcher = Fetcher()
+page = fetcher.fetch('https://example.com', cookies=cookies)
+```
+
+## 表单提交
+
+### GET 请求
+
+```python
+from scrapling import Fetcher
+
+params = {
+    'q': 'search term',
+    'page': '1'
+}
+
+fetcher = Fetcher()
+page = fetcher.fetch('https://example.com/search', params=params)
+```
+
+### POST 请求
+
+```python
+from scrapling import Fetcher
+
+data = {
+    'username': 'user',
+    'password': 'pass'
+}
+
+fetcher = Fetcher()
+page = fetcher.fetch('https://example.com/login', method='POST', data=data)
+```
+
+### JSON 请求
+
+```python
+from scrapling import Fetcher
+
+json_data = {
+    'name': 'John',
+    'email': 'john@example.com'
+}
+
+fetcher = Fetcher()
+page = fetcher.fetch(
+    'https://example.com/api',
+    method='POST',
+    json=json_data
+)
+```
+
+## 超时控制
+
+```python
+from scrapling import Fetcher
+
+fetcher = Fetcher()
+page = fetcher.fetch('https://example.com', timeout=30)  # 30秒超时
+```
+
+## 重试机制
+
+```python
+from scrapling import Fetcher
+
+fetcher = Fetcher()
+
+for attempt in range(3):
+    try:
+        page = fetcher.fetch('https://example.com')
+        if page.ok:
+            break
+    except Exception as e:
+        if attempt == 2:
+            raise
+        print(f'重试 {attempt + 1}/3: {e}')
+```
+
+## 爬虫（Spider）
+
+### 基本爬虫
+
+```python
+from scrapling import Fetcher, Spider
+
+class MySpider(Spider):
+    def parse(self, response):
+        # 解析页面
+        title = response.css('title').text()
+        print(f'标题: {title}')
+        
+        # 提取链接
+        links = response.css('a::attr(href)').getall()
+        for link in links:
+            yield response.follow(link, self.parse)
+
+# 使用
+fetcher = Fetcher()
+spider = MySpider()
+spider.start(['https://example.com'], fetcher)
+```
+
+### 递归爬虫
+
+```python
+from scrapling import Fetcher, Spider
+
+class RecursiveSpider(Spider):
+    def __init__(self, max_depth=3):
+        self.max_depth = max_depth
+    
+    def parse(self, response, depth=0):
+        if depth >= self.max_depth:
+            return
+        
+        # 处理当前页面
+        title = response.css('title').text()
+        print(f'深度 {depth}: {title}')
+        
+        # 递归爬取链接
+        links = response.css('a::attr(href)').getall()
+        for link in links:
+            yield response.follow(
+                link,
+                self.parse,
+                meta={'depth': depth + 1}
+            )
+```
+
+## 性能优化
+
+### 连接池
+
+```python
+from scrapling import Fetcher
+
+# 复用连接
+fetcher = Fetcher()
+
+for url in urls:
+    page = fetcher.fetch(url)
+    # 处理页面
+```
+
+### 内存管理
+
+```python
+from scrapling import Fetcher
+
+fetcher = Fetcher()
+
+for url in urls:
+    page = fetcher.fetch(url)
+    # 处理页面数据
+    data = extract_data(page)
+    save_data(data)
+    
+    # 及时释放内存
+    del page
+```
+
+### 并发控制
+
+```python
+import asyncio
+from scrapling import AsyncFetcher
+
+async def limited_fetch(urls, max_concurrent=5):
+    fetcher = AsyncFetcher()
+    semaphore = asyncio.Semaphore(max_concurrent)
+    
+    async def fetch_with_limit(url):
+        async with semaphore:
+            return await fetcher.fetch(url)
+    
+    tasks = [fetch_with_limit(url) for url in urls]
+    return await asyncio.gather(*tasks)
+```
+
+## 数据提取技巧
+
+### XPath 选择器
+
+```python
+from scrapling import Fetcher
+
+fetcher = Fetcher()
+page = fetcher.fetch('https://example.com')
+
+# 使用 XPath
+titles = page.xpath('//h1/text()')
+links = page.xpath('//a/@href')
+```
+
+### 正则表达式
+
+```python
+import re
+from scrapling import Fetcher
+
+fetcher = Fetcher()
+page = fetcher.fetch('https://example.com')
+
+# 提取邮箱
+emails = re.findall(r'[\w.+-]+@[\w-]+\.[\w.]+', page.body)
+
+# 提取电话
+phones = re.findall(r'\d{3}-\d{3}-\d{4}', page.body)
+```
+
+### JSON 提取
+
+```python
+import json
+from scrapling import Fetcher
+
+fetcher = Fetcher()
+page = fetcher.fetch('https://example.com/api/data')
+
+# 解析 JSON
+data = json.loads(page.body)
+print(data)
+```
+
+## 错误处理最佳实践
+
+```python
+from scrapling import Fetcher
+from scrapling.exceptions import (
+    FetchError,
+    TimeoutError,
+    ConnectionError
+)
+
+fetcher = Fetcher()
+
+try:
+    page = fetcher.fetch('https://example.com')
+    if page.ok:
+        # 处理成功响应
+        process_page(page)
+    else:
+        # 处理错误响应
+        handle_error(page.status)
+except TimeoutError:
+    print('请求超时')
+except ConnectionError:
+    print('连接失败')
+except FetchError as e:
+    print(f'抓取错误: {e}')
+except Exception as e:
+    print(f'未知错误: {e}')
+```
+
+## 下一步
+
+- 查看 [故障排查](../troubleshooting.md) 解决常见问题
+- 访问 [官方文档](https://scrapling.readthedocs.io) 获取完整参考
+- 参与 [GitHub 讨论](https://github.com/D4Vinci/Scrapling/discussions)
